@@ -1,0 +1,345 @@
+openapi: 3.0.3
+info:
+  title: Image API
+  version: 1.0.0
+  description: Authenticated PNG/JPEG upload API with asynchronous WebP processing.
+servers:
+  - url: http://localhost:8020
+paths:
+  /api/register:
+    post:
+      summary: Register a user
+      operationId: register
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /api/login:
+    post:
+      summary: Log in and issue a Sanctum token
+      operationId: login
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string, format: email}
+                password: {type: string, format: password}
+      responses:
+        '200':
+          description: Login succeeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /api/logout:
+    post:
+      summary: Revoke the current token
+      operationId: logout
+      tags: [Authentication]
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message]
+                properties:
+                  message: {type: string, example: Logged out successfully.}
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/user:
+    get:
+      summary: Get the current user
+      operationId: currentUser
+      tags: [Authentication]
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {$ref: '#/components/schemas/User'}
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/images:
+    get:
+      summary: List the current user's image references
+      operationId: listImages
+      tags: [Images]
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: Paginated image list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedImages'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      summary: Upload one PNG or JPEG
+      operationId: uploadImage
+      tags: [Images]
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  description: Genuine, structurally valid PNG/JPEG; at most 5 MiB, 5,000 px per side and 6 megapixels.
+      responses:
+        '202':
+          description: New or pending content accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageResponse'
+        '201':
+          description: Reference created for an already-ready duplicate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '413':
+          description: Multipart request exceeds the 6 MiB Nginx transport limit
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /api/images/{image}:
+    parameters:
+      - name: image
+        in: path
+        required: true
+        description: User image-reference ULID.
+        schema: {type: string, minLength: 26, maxLength: 26}
+    get:
+      summary: Download a ready private WebP
+      operationId: downloadImage
+      tags: [Images]
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Processed WebP file
+          headers:
+            Content-Length: {schema: {type: integer}}
+            ETag: {schema: {type: string}}
+            Cache-Control: {schema: {type: string, example: 'private, max-age=86400'}}
+          content:
+            image/webp:
+              schema: {type: string, format: binary}
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Image is pending/processing or processing failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StateError'
+        '500':
+          description: The ready database record points to an unavailable file
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Message'}
+    delete:
+      summary: Delete the current user's image reference
+      operationId: deleteImage
+      tags: [Images]
+      security: [{bearerAuth: []}]
+      responses:
+        '204': {description: Deleted}
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum
+  responses:
+    Unauthenticated:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Message'}
+    Forbidden:
+      description: Authenticated token does not have the required ability
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Message'}
+    NotFound:
+      description: Not found, including resources owned by another user
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Message'}
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ValidationError'}
+    TooManyRequests:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Message'}
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [name, email, password, password_confirmation]
+      properties:
+        name: {type: string, maxLength: 255}
+        email: {type: string, format: email, maxLength: 255}
+        password:
+          type: string
+          format: password
+          minLength: 8
+          pattern: '^(?=.*[A-Za-z])(?=.*[0-9]).+$'
+          description: At least eight characters containing letters and numbers.
+        password_confirmation: {type: string, format: password}
+    User:
+      type: object
+      required: [id, name, email, created_at]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        email: {type: string, format: email}
+        created_at: {type: string, format: date-time}
+    AuthTokenResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [user, token, token_type]
+          properties:
+            user: {$ref: '#/components/schemas/User'}
+            token:
+              type: string
+              description: Sanctum bearer token; expires after the configured lifetime and has only documented API abilities.
+            token_type: {type: string, enum: [Bearer]}
+    Image:
+      type: object
+      required: [id, original_filename, original_mime, original_size, sha256, status, dimensions, created_at, updated_at]
+      properties:
+        id: {type: string, description: ULID}
+        original_filename: {type: string}
+        original_mime: {type: string, enum: [image/png, image/jpeg]}
+        original_size: {type: integer, maximum: 5242880}
+        sha256: {type: string, minLength: 64, maxLength: 64}
+        status: {type: string, enum: [pending, processing, ready, failed]}
+        dimensions:
+          $ref: '#/components/schemas/Dimensions'
+        processed:
+          nullable: true
+          allOf: [{$ref: '#/components/schemas/ProcessedImage'}]
+        download_url: {type: string, format: uri, nullable: true}
+        failure_message: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    Dimensions:
+      type: object
+      required: [width, height]
+      properties:
+        width: {type: integer, maximum: 5000}
+        height: {type: integer, maximum: 5000}
+    ProcessedImage:
+      type: object
+      required: [mime, size, width, height]
+      properties:
+        mime: {type: string, enum: [image/webp]}
+        size: {type: integer}
+        width: {type: integer}
+        height: {type: integer}
+    ImageResponse:
+      type: object
+      required: [data]
+      properties:
+        data: {$ref: '#/components/schemas/Image'}
+    PaginatedImages:
+      type: object
+      required: [data, links, meta]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/Image'}
+        links: {type: object, additionalProperties: true}
+        meta: {type: object, additionalProperties: true}
+    StateError:
+      type: object
+      required: [message, code, status]
+      properties:
+        message: {type: string}
+        code: {type: string, enum: [image_not_ready, image_processing_failed]}
+        status: {type: string, enum: [pending, processing, failed]}
+    Message:
+      type: object
+      required: [message]
+      properties:
+        message: {type: string}
+    ValidationError:
+      type: object
+      required: [message, errors]
+      properties:
+        message: {type: string}
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items: {type: string}
