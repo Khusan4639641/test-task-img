@@ -1,106 +1,95 @@
 # Image API
 
-Laravel 13 API for authenticated PNG/JPEG uploads, asynchronous WebP conversion, global content deduplication, private downloads, and safe storage cleanup.
+Тестовое задание на Laravel 13: API для авторизованной загрузки PNG/JPEG, асинхронного преобразования в WebP, дедупликации по содержимому, приватной выдачи файлов и безопасного обслуживания хранилища.
 
-## Quick Start with Docker
+## Возможности
 
-### Requirements
+- авторизация через Laravel Sanctum с минимальными разрешениями (abilities) и ограниченным сроком действия токена;
+- проверка содержимого PNG/JPEG и точное ограничение размера до 5 MiB;
+- просмотр и удаление только собственных пользовательских ссылок на изображения;
+- асинхронное WebP-сжатие с помощью GD;
+- глобальная SHA-256-дедупликация физических файлов;
+- обработка через очередь Redis и отдельный сервис `queue`;
+- отложенное удаление и восстановление зависших заданий (cleanup/recovery);
+- feature-, unit-, интеграционные и HTTP multipart-тесты;
+- спецификация OpenAPI 3 и запуск Swagger UI.
+
+## Быстрый запуск через Docker
+
+### Требования
 
 - Git
 - Docker Engine
-- Docker Compose v2 (the `docker compose` command)
+- Docker Compose v2 — команда `docker compose`
 
-### Clone the repository
-
-Using SSH:
+Основная последовательность команд с клонированием по SSH:
 
 ```bash
 git clone git@github.com:Khusan4639641/test-task-img.git
 cd test-task-img
+cp .env.example .env
+docker compose build
+docker compose up -d
+docker compose exec app php artisan key:generate
+docker compose exec app php artisan migrate
+docker compose ps
+curl -i http://localhost:8020
 ```
 
-Or using HTTPS:
+Вместо SSH репозиторий можно клонировать по HTTPS:
 
 ```bash
 git clone https://github.com/Khusan4639641/test-task-img.git
 cd test-task-img
 ```
 
-### Prepare the environment
+Значения из `.env.example` предназначены только для локального Docker-окружения. Не используйте их как учётные данные или секреты production-окружения.
 
-```bash
-cp .env.example .env
-```
+После запуска:
 
-The values in `.env.example` are intended only for the local Docker environment. Do not reuse them as production credentials or production secrets.
+- API: <http://localhost:8020>
+- Nginx публикуется на порту `8020`;
+- сервисы `app`, `queue`, `postgres` и `redis` запускаются автоматически;
+- PostgreSQL и Redis доступны только во внутренней сети Docker и не публикуются на портах хоста;
+- обработчик очереди `queue` начинает принимать задания автоматически.
 
-### Build and start the stack
+### Полезные Docker-команды
 
-```bash
-docker compose build
-docker compose up -d
-```
-
-Generate the local application key after the containers have started:
-
-```bash
-docker compose exec app php artisan key:generate
-```
-
-### Run database migrations
-
-```bash
-docker compose exec app php artisan migrate
-```
-
-### Verify the services
-
-```bash
-docker compose ps
-curl -i http://localhost:8020
-```
-
-The API is available at <http://localhost:8020>; Nginx publishes host port `8020`. The `app`, `queue`, `postgres`, and `redis` services start automatically. PostgreSQL and Redis are available only to the internal Compose network and are not published on host ports.
-
-### Useful commands
-
-Follow application, worker, and proxy logs:
+Просмотр логов приложения, обработчика очереди и Nginx:
 
 ```bash
 docker compose logs -f app queue nginx
 ```
 
-Inspect registered routes:
+Просмотр зарегистрированных маршрутов:
 
 ```bash
 docker compose exec app php artisan route:list
 ```
 
-To apply pending database migrations later, rerun the migration command from the setup steps above.
+Для применения новых миграций повторите команду миграции из основной последовательности запуска.
 
-Run the fast test suite:
+Запуск быстрого набора тестов:
 
 ```bash
 docker compose exec app php artisan test
 ```
 
-Stop and remove the containers while keeping the local data volumes:
+Остановка контейнеров с сохранением локальных данных:
 
 ```bash
 docker compose down
 ```
 
-Be careful with the following command:
+Команда ниже удаляет также локальные тома PostgreSQL и приватных изображений вместе со всеми данными:
 
 ```bash
 docker compose down -v
 ```
 
-It also deletes the local PostgreSQL and private image volumes, including all data stored in them.
-
 ## Swagger UI
 
-The OpenAPI 3 specification is stored in [`docs/openapi.yaml`](docs/openapi.yaml). With the API stack running, start a disposable Swagger UI container from the repository root:
+Спецификация OpenAPI находится в [`docs/openapi.yaml`](docs/openapi.yaml). При запущенном API выполните из корня репозитория:
 
 ```bash
 docker run --rm -d \
@@ -111,103 +100,77 @@ docker run --rm -d \
   swaggerapi/swagger-ui
 ```
 
-After it starts:
+После запуска:
 
 - Swagger UI: <http://localhost:8085>
-- API server: <http://localhost:8020>
+- OpenAPI: `docs/openapi.yaml`
+- API: <http://localhost:8020>
 
-To authorize requests, execute `POST /api/register` or `POST /api/login`, copy the returned token, click **Authorize**, and paste the token into the bearer authorization field. Swagger UI adds the `Bearer` scheme to requests; the protected `/api/images` endpoints can then be called from the page.
+Для работы с закрытыми маршрутами выполните `POST /api/register` или `POST /api/login`, скопируйте возвращённый токен, нажмите **Authorize** и вставьте его в поле авторизации Bearer token. Swagger UI самостоятельно добавит схему `Bearer` к запросам, после чего можно вызывать защищённые маршруты `/api/images`.
 
-Stop Swagger UI with:
+Остановка Swagger UI:
 
 ```bash
 docker stop project20-swagger
 ```
 
-## Troubleshooting
+## Архитектура
 
-- If port `8020` is already in use, change the host-side port in the Nginx `ports` mapping in `compose.yaml`, then use that port in API requests.
-- If a container named `project20-swagger` already exists, stop it with the command from the Swagger UI section and start it again.
-- Check recent service logs:
+### Структура данных
 
-  ```bash
-  docker compose logs --tail=100 app queue nginx postgres redis
-  ```
+Модель данных разделяет физический файл и принадлежащую пользователю ссылку на изображение:
 
-- As a first storage-permission diagnostic, confirm Laravel boots correctly in the `app` container and inspect its runtime information:
+- `image_assets` хранит физический ресурс, исходный SHA-256, состояние обработки, пути, размеры и метаданные результата. Уникальный индекс по `sha256` является основой дедупликации.
+- `image_uploads` хранит отдельную пользовательскую ссылку на изображение, исходное имя файла и владельца. В API эта запись представлена собственным ULID.
+- Один физический файл может использоваться несколькими пользователями через независимые записи `image_uploads`.
 
-  ```bash
-  docker compose exec app php artisan about
-  ```
+Авторизация применяется к пользовательской ссылке на изображение, а не напрямую к общему физическому файлу. Обе таблицы используют ограничения и индексы PostgreSQL. Внешние идентификаторы изображений представлены ULID, поэтому последовательные внутренние ID не раскрываются.
 
-## Architecture
+### Процесс загрузки изображения
 
-The data model deliberately separates physical content from user ownership:
+1. Sanctum аутентифицирует запрос, после чего применяется ограничитель частоты загрузок.
+2. `StoreImageRequest` задаёт точное ограничение размера 5 MiB. PHP принимает до 6 MiB, чтобы Laravel мог вернуть JSON-ошибку валидации.
+3. Проверка содержимого использует `finfo`, `getimagesize`, `jpeginfo -c` и декодирование через GD. Принимаются только структурно корректные PNG/JPEG независимо от расширения файла.
+4. До полного декодирования проверяются размеры: не более 5 000 пикселей по каждой стороне и не более 6 мегапикселей. Оценка памяти учитывает два GD-буфера по 8 байт на пиксель, резерв 16 MiB и ограничение в 80% от PHP `memory_limit`.
+5. SHA-256 вычисляется потоково через `hash_update_stream`; исходный файл также потоково копируется во временную область приватного хранилища.
+6. В транзакции создаётся или выбирается запись `image_assets`, блокируется её строка и создаётся отдельная пользовательская ссылка `image_uploads`.
+7. Задание `ProcessImageAsset` отправляется в Redis через `afterCommit()`, поэтому HTTP-запрос не ожидает WebP-преобразования.
+8. Новый файл, существующая запись в состоянии `pending` или повторная загрузка записи в состоянии `failed` возвращает `202 Accepted`. Ссылка на уже обработанный дубликат может сразу вернуть `201 Created`.
+9. После обработки физический файл становится `ready`, а временный оригинал по возможности удаляется. Остатки после терминальной ошибки подбирает команда отложенного удаления.
 
-- `image_assets` represents one physical source/content hash and its processing result. `sha256` has a database unique index and is the deduplication key.
-- `image_uploads` represents a user's upload/reference, keeps the original filename, and has its own ULID exposed by the API.
-- A single asset may therefore have many references belonging to different users. Authorization always applies to the reference, never directly to a shared asset.
+## Авторизация
 
-Both tables use constraints and indexes suited to PostgreSQL. External image IDs are ULIDs, so sequential database IDs are not exposed.
+API использует Laravel Sanctum. `POST /api/register` создаёт пользователя и токен в одной транзакции, `POST /api/login` выдаёт новый токен, а `POST /api/logout` отзывает только текущий токен.
 
-### Upload flow
+Выданные API токены действуют `SANCTUM_TOKEN_EXPIRATION` минут — по умолчанию 1440. Минимальные разрешения (abilities) определены в секции `api_tokens` файла `config/auth.php`:
 
-1. Sanctum authenticates the request and the upload rate limiter runs.
-2. `StoreImageRequest` enforces an exact 5 MiB application limit. PHP accepts up to 6 MiB so Laravel can return JSON validation errors. The validator uses `finfo`, `getimagesize`, `jpeginfo -c`, and a GD decode to accept only genuine, structurally valid PNG/JPEG content.
-3. Before GD decoding, dimensions are capped at 5,000 pixels per side and 6 megapixels. The validator estimates a worst-case two-buffer GD allocation at 8 bytes/pixel, reserves another 16 MiB, and accepts it only within 80% of the PHP memory limit.
-4. SHA-256 is calculated with `hash_update_stream`; the request file is copied with a stream to private temporary storage.
-5. Inside a database transaction, `insertOrIgnore` plus the unique `image_assets.sha256` index handles concurrent duplicate uploads. The asset row is locked while a separate user reference is created.
-6. A `ProcessImageAsset` job is dispatched with `afterCommit()`. New/pending work and a re-upload of failed content return `202 Accepted`; a reference to an already-ready asset returns `201 Created` immediately.
-7. The Redis worker decodes from disk, applies JPEG EXIF orientation when present, writes WebP at quality 85, calculates the representation hash, and moves it to a content-addressed private path.
-8. Only after the final file exists and references are rechecked under the asset row lock does the worker mark the asset `ready`. The source is removed after success and best-effort after terminal failure.
+- `user:read`
+- `images:read`
+- `images:write`
+- `tokens:revoke`
 
-The job is unique per asset for ten minutes and uses a runtime overlap lock with a 300-second expiry. It is also idempotent at the database level: execution against a `ready` asset returns without rewriting it. It has three attempts, effective retry delays of `10` and `60` seconds, a 120-second timeout, Redis `retry_after=180`, and a terminal `failed` status/reason.
+Маршруты проверяют соответствующее разрешение. Аутентифицированный токен без необходимого разрешения получает `403`. Ошибка входа одинакова для неизвестного email и неверного пароля.
 
-## Storage and deduplication
+Получить или удалить чужую пользовательскую ссылку на изображение нельзя. `ImageUploadPolicy` обеспечивает ответ `404`, чтобы не раскрывать существование чужого ресурса.
 
-Files are never written under `public/`. The local disk stores them under:
+## Маршруты API
 
-```text
-storage/app/private/images/tmp/{ulid}.source
-storage/app/private/images/assets/{hash[0:2]}/{hash[2:4]}/{sha256}.webp
-```
-
-`app` and `queue` share the Docker `image_storage` volume. Downloads pass through the authorized controller and include `Content-Type`, `Content-Length`, a processed-content `ETag`, and `Cache-Control: private`.
-
-Concurrent uploads rely on PostgreSQL's unique index as the final race-condition guard. `INSERT ... ON CONFLICT DO NOTHING` selects and locks the winner, so only one physical asset and one processing job are created. Deleting the last reference marks the asset orphaned but does not remove its row or files in the request. Cleanup removes it after the grace period while holding the asset row lock and rechecking references. A duplicate uploaded before cleanup clears `orphaned_at` and safely reuses the asset.
-
-## Queue worker
-
-PostgreSQL and Redis healthchecks gate both `app` and `queue`. The queue worker is part of the Compose stack and runs automatically as:
-
-```bash
-php artisan queue:work redis --sleep=1 --tries=3 --timeout=120
-```
-
-Redis uses AOF persistence in its own named volume. `REDIS_QUEUE_RETRY_AFTER=180` is intentionally greater than the worker timeout.
-
-## API endpoints
-
-| Method | Endpoint | Auth | Result |
+| Метод | Маршрут | Авторизация | Результат |
 | --- | --- | --- | --- |
-| `POST` | `/api/register` | No | Create user and Sanctum token |
-| `POST` | `/api/login` | No | Issue Sanctum token |
-| `POST` | `/api/logout` | Bearer | Revoke current token |
-| `GET` | `/api/user` | Bearer | Current user |
-| `POST` | `/api/images` | Bearer | Upload one `image` multipart field |
-| `GET` | `/api/images` | Bearer | Paginated list of own references |
-| `GET` | `/api/images/{image}` | Bearer | Download own ready WebP |
-| `DELETE` | `/api/images/{image}` | Bearer | Delete own reference |
+| `POST` | `/api/register` | Нет | Создание пользователя и Sanctum token |
+| `POST` | `/api/login` | Нет | Выдача Sanctum token |
+| `POST` | `/api/logout` | Bearer token | Отзыв текущего токена |
+| `GET` | `/api/user` | Bearer token | Данные текущего пользователя |
+| `POST` | `/api/images` | Bearer token | Загрузка одного изображения в поле `image` |
+| `GET` | `/api/images` | Bearer token | Пагинированный список собственных ссылок |
+| `GET` | `/api/images/{image}` | Bearer token | Скачивание собственного `ready` WebP |
+| `DELETE` | `/api/images/{image}` | Bearer token | Удаление собственной пользовательской ссылки |
 
-Access to another user's ULID returns `404`, including delete, so resource existence is not disclosed. Authentication failures return `401`; validation failures use Laravel's JSON `422` shape. Register is limited to 5 requests/minute per IP, login to 10/minute per email/IP key, and upload to 30/minute per user.
+Неаутентифицированный запрос получает `401`, недостаточная ability — `403`, ошибка валидации — JSON с `422`. Регистрация ограничена 5 запросами в минуту на IP, вход — 10 запросами в минуту на комбинацию email/IP, загрузка изображения — 30 запросами в минуту на пользователя.
 
-API-issued Sanctum tokens expire after `SANCTUM_TOKEN_EXPIRATION` minutes (1440 by default). Their lifetime and minimal abilities are defined under `api_tokens` in `config/auth.php`: `user:read`, `images:read`, `images:write`, and `tokens:revoke`. Routes enforce the corresponding ability and return `403` for an authenticated token without it.
+## Примеры curl
 
-The full OpenAPI 3 contract is in [`docs/openapi.yaml`](docs/openapi.yaml).
-
-## curl example
-
-Register and save the returned token:
+Регистрация пользователя и получение токена:
 
 ```bash
 curl -sS -X POST http://localhost:8020/api/register \
@@ -215,6 +178,8 @@ curl -sS -X POST http://localhost:8020/api/register \
   -H 'Content-Type: application/json' \
   -d '{"name":"Demo","email":"demo@example.com","password":"Password123","password_confirmation":"Password123"}'
 ```
+
+Сохраните токен из ответа и выполните нужные запросы:
 
 ```bash
 TOKEN='paste-token-here'
@@ -238,9 +203,9 @@ curl -i -X DELETE http://localhost:8020/api/images/$IMAGE_ID \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-## Response states
+## Статусы обработки
 
-Upload/list resources include `pending`, `processing`, `ready`, or `failed`.
+Ресурсы загрузки и списка содержат один из статусов: `pending`, `processing`, `ready` или `failed`.
 
 ```json
 {
@@ -259,15 +224,83 @@ Upload/list resources include `pending`, `processing`, `ready`, or `failed`.
 }
 ```
 
-Downloading `pending`/`processing` content returns `409` with code `image_not_ready`. A terminal processing failure returns `409` with code `image_processing_failed`; internal failure details remain stored for operations but are not exposed publicly.
+Попытка скачать файл в состоянии `pending` или `processing` возвращает `409` с кодом `image_not_ready`. Терминальная ошибка обработки возвращает `409` с кодом `image_processing_failed`; внутренняя причина сохраняется для диагностики, но не раскрывается через API.
 
-Lists use Laravel pagination with `data`, `links`, and `meta`. Successful delete returns `204 No Content`.
+Список использует стандартную пагинацию Laravel с полями `data`, `links` и `meta`. Успешное удаление возвращает `204 No Content`.
 
-## Testing and quality checks
+## Приватное хранилище и дедупликация
 
-The fast feature/unit suite uses the test command from Quick Start. It forces SQLite in-memory configuration and uses fake storage/queue where appropriate.
+Пользовательские файлы не записываются в `public/`. Локальный диск Laravel хранит их по следующим путям:
 
-Real PostgreSQL + Redis integration flow:
+```text
+storage/app/private/images/tmp/{ulid}.source
+storage/app/private/images/assets/{hash[0:2]}/{hash[2:4]}/{sha256}.webp
+```
+
+Сервисы `app` и `queue` совместно используют том Docker `image_storage`. Файл выдаётся только через авторизованный контроллер с заголовками `Content-Type`, `Content-Length`, `ETag` обработанного содержимого и `Cache-Control: private`.
+
+Конкурентные загрузки защищены уникальным индексом PostgreSQL. `INSERT ... ON CONFLICT DO NOTHING` выбирает и блокирует запись-победитель, поэтому для одного SHA-256 создаётся один физический файл и одно исходное задание обработки, а пользовательские ссылки остаются независимыми.
+
+Удаление последней пользовательской ссылки не удаляет физический файл внутри HTTP-запроса. Запись помечается через `orphaned_at`, а команда отложенного удаления обрабатывает её после периода ожидания, повторно проверяя ссылки под блокировкой строки. Повторная загрузка до этого удаления очищает `orphaned_at` и безопасно переиспользует физический файл.
+
+## WebP-сжатие
+
+Обработчик очереди читает исходник с диска, применяет EXIF orientation для JPEG, если необходимые данные доступны, и создаёт WebP с качеством 85 через GD. Для PNG сохраняется альфа-канал.
+
+Результат перемещается по пути с адресацией по содержимому, построенному на основе SHA-256 исходного файла. После записи обработчик повторно блокирует `image_assets`, проверяет наличие пользовательских ссылок и только затем переводит физический файл в `ready`.
+
+## Очередь
+
+Проверки готовности PostgreSQL и Redis управляют запуском сервисов `app` и `queue`. Отдельный обработчик очереди запускается командой:
+
+```bash
+php artisan queue:work redis --sleep=1 --tries=3 --timeout=120
+```
+
+`ProcessImageAsset` уникален для одного физического файла в течение 10 минут и использует блокировку `WithoutOverlapping` со сроком 300 секунд. Задание идемпотентно на уровне базы данных: повторный запуск для файла в состоянии `ready` завершается без перезаписи.
+
+Для задания предусмотрены три попытки, задержки повторов 10 и 60 секунд, `timeout=120` и терминальный переход в `failed`. Значение `REDIS_QUEUE_RETRY_AFTER=180` намеренно превышает timeout обработчика.
+
+Redis использует постоянное хранение AOF в отдельном томе Docker.
+
+## Обслуживание хранилища
+
+### Отложенное удаление (cleanup)
+
+Предварительный просмотр кандидатов старше настроенного периода ожидания — по умолчанию 24 часа:
+
+```bash
+docker compose exec app php artisan images:cleanup --dry-run
+```
+
+Удаление безопасных кандидатов:
+
+```bash
+docker compose exec app php artisan images:cleanup
+```
+
+Параметр `--hours=N` принимает только неотрицательное целое число и переопределяет период ожидания. Команда удаляет временные файлы без ссылок, отложенные физические файлы без пользовательских ссылок и файлы, для которых отсутствует запись в базе данных.
+
+Перед каждым удалением выполняется повторная проверка базы данных. Запись `image_assets` блокируется, физические файлы удаляются до удаления строки, а `--dry-run` не изменяет базу данных и хранилище.
+
+### Восстановление зависших заданий (recovery)
+
+Предварительный просмотр или восстановление зависших физических файлов в состояниях `pending`/`processing` — по умолчанию старше 15 минут:
+
+```bash
+docker compose exec app php artisan images:recover --dry-run
+docker compose exec app php artisan images:recover
+```
+
+Параметр `--minutes=N` переопределяет возраст кандидатов. Восстановление идемпотентно: команда блокирует каждую строку, повторно проверяет её состояние и отправляет одно задание через `afterCommit()`.
+
+Зависший физический файл без пользовательских ссылок или без временного исходника переводится в `failed`, а не возвращается в очередь. В production команду следует запускать по расписанию и отслеживать рост числа `failed` и зависших заданий.
+
+## Тестирование и проверки качества
+
+Быстрый набор feature- и unit-тестов запускается командой из раздела быстрого запуска. Он использует SQLite in-memory, а также имитации хранилища и очереди там, где это уместно.
+
+Интеграционный сценарий с PostgreSQL и Redis:
 
 ```bash
 docker compose exec postgres sh /docker-entrypoint-initdb.d/10-create-test-database.sh
@@ -276,55 +309,50 @@ docker compose exec -e APP_ENV=testing -e DB_DATABASE=image_api_test \
 docker compose exec app ./vendor/bin/phpunit --configuration=phpunit.integration.xml
 ```
 
-The integration suite asserts `current_database() = image_api_test`, tests the PostgreSQL ready-asset constraint, and runs the Redis-backed image flow. All PHPUnit database variables use `force=true`, and an additional fail-fast guard refuses any destructive PostgreSQL suite unless the database name ends in `_test`.
+Интеграционные тесты явно проверяют `current_database() = image_api_test`, ограничение PostgreSQL CHECK для записи в состоянии `ready` и обработку изображения через Redis. Все критичные переменные PHPUnit используют `force=true`; дополнительная fail-fast проверка запрещает разрушительные тесты для PostgreSQL, если имя тестовой базы данных не заканчивается на `_test`.
 
-After rebuilding and starting the complete stack, run the real Nginx/FPM multipart boundary test:
+Реальный multipart-тест через Nginx/FPM:
 
 ```bash
 docker compose exec app ./vendor/bin/phpunit --configuration=phpunit.http.xml
 ```
 
-It sends valid PNG files of exactly 5 MiB and 5 MiB + 1 byte through Nginx and PHP. The first is accepted; the second must return Laravel JSON `422`.
+Тест отправляет корректные PNG размером ровно 5 MiB и 5 MiB + 1 байт. Первый принимается, второй должен получить JSON-ответ Laravel с `422`.
+
+Форматирование и проверка Composer:
 
 ```bash
 docker compose exec app ./vendor/bin/pint
 docker compose exec app composer validate --strict
 ```
 
-Use the route inspection command from Quick Start when reviewing the API surface.
+## Устранение проблем
 
-## Cleanup
+- Если порт `8020` занят, измените порт хоста в секции `ports` сервиса `nginx` файла `compose.yaml`, затем используйте новый порт в запросах к API.
+- Если контейнер `project20-swagger` уже существует, остановите его командой из раздела Swagger UI и запустите снова.
+- Для просмотра последних логов выполните:
 
-Preview candidates older than the configured 24-hour grace period:
+  ```bash
+  docker compose logs --tail=100 app queue nginx postgres redis
+  ```
 
-```bash
-docker compose exec app php artisan images:cleanup --dry-run
-```
+- Для первичной диагностики прав приватного хранилища убедитесь, что Laravel запускается в контейнере `app`, и проверьте параметры среды выполнения:
 
-Delete safe candidates, including delayed orphan assets:
+  ```bash
+  docker compose exec app php artisan about
+  ```
 
-```bash
-docker compose exec app php artisan images:cleanup
-```
+## Рекомендации для production
 
-`--hours=N` must be a non-negative integer and overrides the grace period. The command removes unreferenced temporary files, delayed database assets with no user references, and physical asset files absent from the database. Before every deletion it repeats the database check; database assets are locked and their files are removed before the row is deleted.
+- Запускайте несколько FPM-экземпляров без локального состояния и несколько обработчиков очереди Redis. `ShouldBeUnique`, `WithoutOverlapping`, уникальные ограничения базы данных, блокировки строк и механизм восстановления защищают штатную повторную доставку и зависшие задания.
+- Для работы на нескольких хостах перенесите приватные файлы в объектное хранилище. Сохраните ключи с адресацией по содержимому и используйте короткоживущие авторизованные URL либо аутентифицированный прокси.
+- Используйте управляемые PostgreSQL и Redis, настройте мониторинг, резервное копирование, уведомления о глубине очереди и `failed` заданиях, а также автоматическое масштабирование обработчиков.
+- При высокой нагрузке рассмотрите прямую загрузку в карантинную область объектного хранилища, проверку на вредоносное содержимое, outbox для гарантированной публикации заданий после фиксации транзакции и отдельный пул обработчиков изображений.
 
-Preview or recover stale referenced `pending`/`processing` assets (15 minutes by default):
+## Известные ограничения
 
-```bash
-docker compose exec app php artisan images:recover --dry-run
-docker compose exec app php artisan images:recover
-```
-
-`--minutes=N` overrides the age. Recovery is idempotent: it row-locks each stale asset, refreshes its timestamp/state, and dispatches once after commit. A stale asset without references, or without its source, is marked failed instead of being requeued.
-
-In production, schedule the command periodically and alert on growing `failed`/stuck-processing counts.
-
-## Production scaling notes
-
-- Run multiple stateless FPM instances and many Redis workers; `ShouldBeUnique`, `WithoutOverlapping`, database uniqueness, row locks, and recovery protect normal duplicate delivery and stale work.
-- Move private assets to an object store for multi-host deployments. Keep content-addressed keys and use authorized short-lived delivery URLs or an authenticated proxy.
-- Use managed PostgreSQL/Redis with monitoring, backups, queue-depth alerts, failed-job alerts, and worker autoscaling.
-- For very large throughput, add direct-to-quarantine object uploads, malware scanning, an outbox for guaranteed post-commit publication, and dedicated image-processing worker pools.
-- Current validation decodes the bounded image once during HTTP validation to reject corrupt content. The 5,000-dimension, 6-megapixel and runtime memory-budget checks happen before decode; transformation remains asynchronous.
-- WebP generation uses GD and quality 85. PNG alpha is preserved; animated input is not accepted.
+- Текущий локальный диск и том Docker рассчитаны на один Docker-хост. Для нескольких хостов требуется общее объектное хранилище.
+- Проверка содержимого один раз полностью декодирует уже ограниченное по размерам изображение внутри HTTP-запроса, чтобы отклонить повреждённый файл. Само WebP-преобразование остаётся асинхронным.
+- Поддерживаются только статические PNG/JPEG. Анимированные изображения, SVG, GIF и WebP при загрузке отклоняются.
+- WebP создаётся через GD с качеством 85; отдельная оптимизация под особенности конкретного изображения не выполняется.
+- Nginx принимает multipart-запрос до 6M, а точное ограничение размера файла 5 MiB применяется валидацией Laravel.
