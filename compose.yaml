@@ -8,8 +8,11 @@ services:
     image: project20-app
     env_file:
       - .env
+    environment:
+      REDIS_QUEUE_RETRY_AFTER: ${REDIS_QUEUE_RETRY_AFTER:-180}
     volumes:
-      - ./.env:/var/www/html/.env:ro
+      - ./.env:/var/www/html/.env
+      - image_storage:/var/www/html/storage/app/private
     depends_on:
       postgres:
         condition: service_healthy
@@ -35,8 +38,10 @@ services:
       POSTGRES_DB: ${DB_DATABASE:-image_api}
       POSTGRES_USER: ${DB_USERNAME:-image_api}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-image_api_password}
+      POSTGRES_TEST_DB: ${DB_TEST_DATABASE:-image_api_test}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-test-database.sh:/docker-entrypoint-initdb.d/10-create-test-database.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -47,6 +52,9 @@ services:
 
   redis:
     image: redis:alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -57,10 +65,14 @@ services:
 
   queue:
     image: project20-app
+    user: www-data
     env_file:
       - .env
+    environment:
+      REDIS_QUEUE_RETRY_AFTER: ${REDIS_QUEUE_RETRY_AFTER:-180}
     volumes:
       - ./.env:/var/www/html/.env:ro
+      - image_storage:/var/www/html/storage/app/private
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,3 +90,5 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
+  image_storage:

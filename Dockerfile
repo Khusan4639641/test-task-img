@@ -9,8 +9,11 @@ RUN apt-get update \
         libjpeg62-turbo-dev \
         libpng-dev \
         libpq-dev \
+        libsqlite3-dev \
         libwebp-dev \
         libzip-dev \
+        curl \
+        jpeginfo \
         unzip \
     && docker-php-ext-configure gd \
         --with-freetype \
@@ -23,6 +26,7 @@ RUN apt-get update \
         intl \
         pcntl \
         pdo_pgsql \
+        pdo_sqlite \
         pgsql \
         zip \
     && pecl install redis \
@@ -31,6 +35,8 @@ RUN apt-get update \
     && rm -rf /tmp/pear /var/lib/apt/lists/*
 
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+
+COPY docker/php/image-api.ini /usr/local/etc/php/conf.d/zz-image-api.ini
 
 WORKDIR /var/www/html
 

@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 use App\Models\User;
 
 return [
@@ -113,5 +115,15 @@ return [
     */
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
+
+    'api_tokens' => [
+        'expiration_minutes' => (int) env('SANCTUM_TOKEN_EXPIRATION', 1440),
+        'abilities' => [
+            'user:read',
+            'images:read',
+            'images:write',
+            'tokens:revoke',
+        ],
+    ],
 
 ];
